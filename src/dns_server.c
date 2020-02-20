@@ -2356,7 +2356,7 @@ int dns_server_query(char *domain, int qtype, dns_result_callback callback, void
 		goto errout;
 	}
 
-	_dns_server_request_release_complete(request, 0);
+	_dns_server_request_release_complete(request, 1);
 	return ret;
 errout:
 	if (request) {
