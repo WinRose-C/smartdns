@@ -1729,11 +1729,12 @@ static int _dns_client_socket_ssl_send(SSL *ssl, const void *buf, int num)
 	unsigned long ssl_err = 0;
 
 	if (ssl == NULL) {
+		errno = EINVAL;
 		return -1;
 	}
 
 	ret = SSL_write(ssl, buf, num);
-	if (ret >= 0) {
+	if (ret > 0) {
 		return ret;
 	}
 
@@ -1752,12 +1753,14 @@ static int _dns_client_socket_ssl_send(SSL *ssl, const void *buf, int num)
 		break;
 	case SSL_ERROR_SSL:
 		ssl_err = ERR_get_error();
-		if (ERR_GET_REASON(ssl_err) == SSL_R_UNINITIALIZED || ERR_GET_REASON(ssl_err) == SSL_R_PROTOCOL_IS_SHUTDOWN) {
+		int ssl_reason = ERR_GET_REASON(ssl_err);
+		if (ssl_reason == SSL_R_UNINITIALIZED || ssl_reason == SSL_R_PROTOCOL_IS_SHUTDOWN ||
+			ssl_reason == SSL_R_BAD_LENGTH || ssl_reason == SSL_R_SHUTDOWN_WHILE_IN_INIT) {
 			errno = EAGAIN;
 			return -1;
 		}
 
-		tlog(TLOG_DEBUG, "SSL write fail error no:  %s(%ld)\n", ERR_reason_error_string(ssl_err), ssl_err);
+		tlog(TLOG_ERROR, "SSL write fail error no:  %s(%d)\n", ERR_reason_error_string(ssl_err), ssl_reason);
 		errno = EFAULT;
 		ret = -1;
 		break;
@@ -2247,10 +2250,14 @@ static int _dns_client_process_tls(struct dns_server_info *server_info, struct e
 				fd_event.events = EPOLLIN;
 			} else if (ssl_ret == SSL_ERROR_WANT_WRITE) {
 				fd_event.events = EPOLLOUT | EPOLLIN;
+			} else if (ssl_ret == SSL_ERROR_SYSCALL) {
+				tlog(TLOG_WARN, "SSL syscall failed, %s", strerror(errno));
+				goto errout;
 			} else {
 				unsigned long ssl_err = ERR_get_error();
-				tlog(TLOG_ERROR, "Handshake with %s failed, error no: %s(%ld)\n", server_info->ip,
-					 ERR_reason_error_string(ssl_err), ssl_err);
+				int ssl_reason = ERR_GET_REASON(ssl_err);
+				tlog(TLOG_WARN, "Handshake with %s failed, error no: %s(%d, %d, %d)\n", server_info->ip,
+					 ERR_reason_error_string(ssl_err), ret, ssl_ret, ssl_reason);
 				goto errout;
 			}
 
@@ -2430,11 +2437,12 @@ static int _dns_client_send_tls(struct dns_server_info *server_info, void *packe
 	}
 
 	if (server_info->ssl == NULL) {
+		errno = EINVAL;
 		return -1;
 	}
 
 	send_len = _dns_client_socket_ssl_send(server_info->ssl, inpacket, len);
-	if (send_len < 0) {
+	if (send_len <= 0) {
 		if (errno == EAGAIN || errno == EPIPE || server_info->ssl == NULL) {
 			/* save data to buffer, and retry when EPOLLOUT is available */
 			return _dns_client_send_data_to_buffer(server_info, inpacket, len);
@@ -2480,11 +2488,12 @@ static int _dns_client_send_https(struct dns_server_info *server_info, void *pac
 	}
 
 	if (server_info->ssl == NULL) {
+		errno = EINVAL;
 		return -1;
 	}
 
 	send_len = _dns_client_socket_ssl_send(server_info->ssl, inpacket, http_len);
-	if (send_len < 0) {
+	if (send_len <= 0) {
 		if (errno == EAGAIN || errno == EPIPE || server_info->ssl == NULL) {
 			/* save data to buffer, and retry when EPOLLOUT is available */
 			return _dns_client_send_data_to_buffer(server_info, inpacket, http_len);
